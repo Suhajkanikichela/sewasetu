@@ -456,17 +456,33 @@ def view_application(app_id):
 
 @app.route("/ack/<int:app_id>.pdf")
 def ack_pdf(app_id):
+    if not session.get("logged_in"):
+        return redirect(url_for("status_login"))
     path = os.path.join(UPLOAD_DIR, "ack", "%d.pdf" % app_id)
     if not os.path.exists(path):
         conn = get_db()
         cur = conn.cursor()
-        cur.execute("SELECT id FROM applications WHERE id = %s", (app_id,))
-        if not cur.fetchone():
+        cur.execute("SELECT mobile FROM applications WHERE id = %s", (app_id,))
+        row = cur.fetchone()
+        if not row:
             cur.close(); conn.close()
             abort(404)
+        if not session.get("admin") and row[0] != session.get("portal_mobile"):
+            cur.close(); conn.close()
+            abort(403)
         data = generate_acknowledgment(cur, app_id)
         cur.close(); conn.close()
         return send_file(io.BytesIO(data), mimetype="application/pdf")
+    if not session.get("admin"):
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT mobile FROM applications WHERE id = %s", (app_id,))
+        row = cur.fetchone()
+        cur.close(); conn.close()
+        if not row:
+            abort(404)
+        if row[0] != session.get("portal_mobile"):
+            abort(403)
     return send_file(path, mimetype="application/pdf")
 
 

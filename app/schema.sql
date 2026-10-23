@@ -56,6 +56,10 @@ CREATE INDEX IF NOT EXISTS idx_applications_mobile
 CREATE INDEX IF NOT EXISTS idx_applications_submitted_at
     ON applications (submitted_at);
 
+CREATE INDEX IF NOT EXISTS idx_applications_pending_sla
+    ON applications (submitted_at)
+    WHERE status = 'PENDING' AND submitted_at IS NOT NULL;
+
 -- OTP lookup: WHERE mobile ORDER BY id DESC
 CREATE INDEX IF NOT EXISTS idx_otps_mobile
     ON otps (mobile);

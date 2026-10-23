@@ -15,4 +15,8 @@
   <tr><th>Decided</th><td>{{ a[10] or '-' }}</td></tr>
 </table>
 <p><a href="/ack/{{ app_id }}.pdf">Download Acknowledgment (PDF)</a></p>
+{% if edit_open %}
+<p><a href="/application/{{ app_id }}/edit"><button class="btn" style="background:#b36b00">Correct a Typo (edit window open)</button></a></p>
+{% endif %}
 {% endblock %}
+

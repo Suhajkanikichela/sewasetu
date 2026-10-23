@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Edit Application</h2>
+<div class="flash" style="background:#fff8e1;border-color:#f9a825;color:#5d4037">
+  <b>Edit window:</b> You may correct minor errors within 24 hours of submission.
+  Time remaining: approximately {{ (seconds_remaining // 3600) }}h {{ ((seconds_remaining % 3600) // 60) }}m.
+  Only name, village, bank account, and IFSC may be changed.
+</div>
+<form method="post">
+  <label>Full Name of Applicant</label>
+  <input type="text" name="applicant_name" value="{{ applicant_name }}" required>
+  <label>Village / Town</label>
+  <input type="text" name="village" value="{{ village }}" required>
+  <label>Bank Account Number</label>
+  <input type="text" name="bank_account" value="{{ bank_account }}" required>
+  <label>IFSC Code</label>
+  <input type="text" name="ifsc" value="{{ ifsc }}">
+  <p><button class="btn" type="submit">Save Correction</button>
+  &nbsp;<a href="/application/{{ app_id }}"><button class="btn" style="background:#555" type="button">Cancel</button></a></p>
+</form>
+{% endblock %}

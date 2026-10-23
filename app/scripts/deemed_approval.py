@@ -20,8 +20,8 @@ import requests
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 config = configparser.ConfigParser()
-# settings.ini was renamed to app.ini in CR-2026-031 (March 2026).
-# Previously this FileNotFoundError caused the cron to silently fail on every run,
+# The consolidated application configuration is used by the cron process.
+# Previously this missing-file error caused the cron to silently fail on every run,
 # leaving all PENDING applications stuck indefinitely past their RTPS deadline.
 CONFIG_PATH = os.path.join(BASE_DIR, "config", "app.ini")
 with open(CONFIG_PATH) as fh:
@@ -44,7 +44,7 @@ def main():
     cur.execute(
         """UPDATE applications
            SET status = 'DEEMED_APPROVED', decided_at = %s, decided_by = 'RTPS-AUTO'
-           WHERE status = 'PENDING' AND submitted_at < %s
+           WHERE status = 'PENDING' AND submitted_at IS NOT NULL AND submitted_at <= %s
            RETURNING application_no, mobile""",
         (datetime.now(), cutoff))
     rows = cur.fetchall()

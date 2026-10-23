@@ -35,3 +35,28 @@ CREATE TABLE IF NOT EXISTS otps (
     code       VARCHAR(6),
     created_at TIMESTAMP
 );
+
+-- Performance indexes (Issue #4 fix)
+-- These are safe to run on a live database using CREATE INDEX CONCURRENTLY
+-- (remove CONCURRENTLY if running during initial setup / docker-entrypoint-initdb.d).
+
+-- Admin dashboard GROUP BY status, overdue count filter
+CREATE INDEX IF NOT EXISTS idx_applications_status
+    ON applications (status);
+
+-- Admin list page: WHERE status + ORDER BY submitted_at (covers pagination too)
+CREATE INDEX IF NOT EXISTS idx_applications_status_submitted
+    ON applications (status, submitted_at);
+
+-- Citizen portal and duplicate-check: WHERE mobile
+CREATE INDEX IF NOT EXISTS idx_applications_mobile
+    ON applications (mobile);
+
+-- RTPS cron job: WHERE status='PENDING' AND submitted_at < cutoff
+CREATE INDEX IF NOT EXISTS idx_applications_submitted_at
+    ON applications (submitted_at);
+
+-- OTP lookup: WHERE mobile ORDER BY id DESC
+CREATE INDEX IF NOT EXISTS idx_otps_mobile
+    ON otps (mobile);
+

@@ -346,13 +346,20 @@ def handle_submission():
     return render_template("confirmation.html", app_no=app_no, app_id=new_id)
 
 
-def _safe_latin(text):
-    """Encode a value for fpdf2 Latin-1 cells: replace non-Latin chars with '?'.
-    This preserves ASCII/Latin names exactly. For full Indic script support,
-    a Unicode TTF font (e.g. NotoSansAssamese-Regular.ttf) should be added
-    via pdf.add_font() and pdf.set_font('NotoSans') — see Issue #1 fix notes.
-    """
-    return str(text).encode("latin-1", errors="replace").decode("latin-1")
+def _pdf_font_path():
+    for path in (
+            "/usr/share/fonts/truetype/noto/NotoSansBengali-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansBengali[wght].ttf"):
+        if os.path.exists(path):
+            return path
+    raise RuntimeError("Unicode PDF font is not installed")
+
+
+def _pdf_latin_font_path():
+    path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    if os.path.exists(path):
+        return path
+    raise RuntimeError("Latin PDF fallback font is not installed")
 
 
 def generate_acknowledgment(cur, app_id):
@@ -361,10 +368,17 @@ def generate_acknowledgment(cur, app_id):
                 (app_id,))
     row = cur.fetchone()
     pdf = FPDF()
+    font_path = _pdf_font_path()
+    latin_font_path = _pdf_latin_font_path()
+    pdf.add_font("NotoSans", fname=font_path)
+    pdf.add_font("NotoSans", style="B", fname=font_path)
+    pdf.add_font("NotoSans", style="I", fname=font_path)
+    pdf.add_font("DejaVu", fname=latin_font_path)
+    pdf.set_fallback_fonts(["DejaVu"])
     pdf.add_page()
-    pdf.set_font("Helvetica", "B", 14)
+    pdf.set_font("NotoSans", "B", 14)
     pdf.cell(0, 10, "GOVERNMENT OF PURVANCHAL", ln=1, align="C")
-    pdf.set_font("Helvetica", "", 11)
+    pdf.set_font("NotoSans", "", 11)
     pdf.cell(0, 8, "Department of Social Welfare", ln=1, align="C")
     pdf.cell(0, 8, "Old Age Pension Scheme - Acknowledgment", ln=1, align="C")
     pdf.ln(4)

@@ -20,7 +20,10 @@ import requests
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 config = configparser.ConfigParser()
-CONFIG_PATH = os.path.join(BASE_DIR, "config", "settings.ini")
+# settings.ini was renamed to app.ini in CR-2026-031 (March 2026).
+# Previously this FileNotFoundError caused the cron to silently fail on every run,
+# leaving all PENDING applications stuck indefinitely past their RTPS deadline.
+CONFIG_PATH = os.path.join(BASE_DIR, "config", "app.ini")
 with open(CONFIG_PATH) as fh:
     config.read_file(fh)
 

@@ -69,6 +69,14 @@ class TestEncoding:
         from app.app import sanitize
         assert sanitize("  Rajan Kumar  ") == "Rajan Kumar"
 
+    def test_pdf_generation_does_not_replace_unicode(self):
+        """Acknowledgements must use a Unicode font, not Latin-1 replacement."""
+        import app.app as flask_app
+        import inspect
+        source = inspect.getsource(flask_app.generate_acknowledgment)
+        assert "_safe_latin" not in source
+        assert 'set_font("NotoSans"' in source
+
     def test_none_returns_empty(self):
         from app.app import sanitize
         assert sanitize(None) == ""
@@ -144,10 +152,39 @@ class TestSecurity:
         resp = app_client.get("/__gateway/api/messages")
         assert resp.status_code == 403
 
+    def test_acknowledgment_requires_login(self, app_client):
+        resp = app_client.get("/ack/1.pdf")
+        assert resp.status_code in (302, 403)
+
+    def test_acknowledgment_blocks_other_citizen(self, app_client):
+        with app_client.session_transaction() as sess:
+            sess["logged_in"] = True
+            sess["portal_mobile"] = "9000000001"
+        with patch("app.app.get_db") as mock_db:
+            mock_conn = MagicMock()
+            mock_cur = MagicMock()
+            mock_db.return_value = mock_conn
+            mock_conn.cursor.return_value = mock_cur
+            mock_cur.fetchone.return_value = ("9000000002",)
+            resp = app_client.get("/ack/1.pdf")
+        assert resp.status_code == 403
+
+    def test_templates_do_not_load_external_tracking_assets(self):
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(base, "app", "templates", "base.html"), encoding="utf-8") as handle:
+            template = handle.read()
+        assert "fonts.googleapis.com" not in template
+
     def test_no_sqli_in_reset_password(self, app_client):
         """SQL injection payload in mobile field must not crash or dump data."""
         payload = "' OR '1'='1'; --"
-        resp = app_client.post("/status/reset", data={"mobile": payload})
+        with patch("app.app.get_db") as mock_db:
+            mock_conn = MagicMock()
+            mock_cur = MagicMock()
+            mock_db.return_value = mock_conn
+            mock_conn.cursor.return_value = mock_cur
+            mock_cur.fetchone.return_value = None
+            resp = app_client.post("/status/reset", data={"mobile": payload})
         # Must return 200 (flash message page), not 500
         assert resp.status_code == 200
         assert b"SELECT" not in resp.data  # must not echo SQL
@@ -230,6 +267,17 @@ class TestIndexes:
         base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         schema = open(os.path.join(base, "app", "schema.sql")).read()
         assert "idx_applications_status_submitted" in schema
+
+    def test_schema_has_partial_pending_sla_index(self):
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        schema = open(os.path.join(base, "app", "schema.sql")).read()
+        assert "idx_applications_pending_sla" in schema
+
+    def test_cron_excludes_unsubmitted_rows(self):
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        script = open(os.path.join(base, "app", "scripts", "deemed_approval.py")).read()
+        assert "submitted_at IS NOT NULL" in script
+        assert "submitted_at <= %s" in script
 
 
 # ===========================================================================

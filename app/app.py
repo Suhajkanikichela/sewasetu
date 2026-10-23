@@ -65,14 +65,14 @@ def get_db():
     )
 
 
-def sanitize(value, maxlen=20):
-    # Trim input to safe length for downstream systems (NIC mandate 2019:
-    # legacy disbursement interface accepts fixed-width fields).
+def sanitize(value, maxlen=100):
+    # Trim input to safe length. maxlen is in CHARACTERS (not bytes) so that
+    # multi-byte scripts (Assamese, Devanagari, etc.) are never cut mid-codepoint.
+    # NIC mandate 2019 fixed-width limit was 20 bytes, but that predates Unicode
+    # name entry; column width is VARCHAR(100) so we use that as the ceiling.
     if value is None:
         return ""
-    value = value.strip()
-    encoded = value.encode("utf-8")[:maxlen]
-    return encoded.decode("utf-8", errors="ignore")
+    return value.strip()[:maxlen]
 
 
 def hash_password(p):
@@ -115,9 +115,15 @@ def about():
 @app.route("/__gateway/", defaults={"subpath": ""})
 @app.route("/__gateway/<path:subpath>")
 def gateway_proxy(subpath):
-    # Convenience proxy to the internal SMS gateway, so the OTP inbox is reachable
-    # on the main site without opening a second port on the host. The gateway
-    # itself runs only on the internal network.
+    # Convenience proxy to the internal SMS gateway console — admin-only.
+    # Previously unauthenticated, which allowed any internet user to read all OTPs
+    # and citizen mobile numbers via /api/messages. Restricted to admin session.
+    if not session.get("admin"):
+        abort(403)
+    # Block the /api/messages and /api/send endpoints from the proxy — admin console
+    # (the visual inbox at /) is safe to expose; raw API endpoints are not.
+    if subpath.startswith("api/"):
+        abort(403)
     try:
         r = requests.get(SMS_GATEWAY_URL + "/" + subpath,
                          params=request.args, timeout=5)
@@ -269,9 +275,11 @@ def handle_submission():
             flash("Something went wrong. Please try again.")
             return redirect(url_for("form_step", step=1))
 
-    # lenient date parsing to reduce rejections (CR-2024-117)
+    # Lenient date parsing (CR-2024-117). DD/MM/YYYY is the Indian standard and
+    # must be tried FIRST; trying MM/DD first misparses e.g. "05/12/1960" as May 12
+    # instead of December 5 for any day ≤ 12.
     dob = None
-    for fmt in ("%m/%d/%Y", "%d/%m/%Y"):
+    for fmt in ("%d/%m/%Y", "%m/%d/%Y"):
         try:
             dob = datetime.strptime(dob_raw, fmt).date()
             break
@@ -338,6 +346,15 @@ def handle_submission():
     return render_template("confirmation.html", app_no=app_no, app_id=new_id)
 
 
+def _safe_latin(text):
+    """Encode a value for fpdf2 Latin-1 cells: replace non-Latin chars with '?'.
+    This preserves ASCII/Latin names exactly. For full Indic script support,
+    a Unicode TTF font (e.g. NotoSansAssamese-Regular.ttf) should be added
+    via pdf.add_font() and pdf.set_font('NotoSans') — see Issue #1 fix notes.
+    """
+    return str(text).encode("latin-1", errors="replace").decode("latin-1")
+
+
 def generate_acknowledgment(cur, app_id):
     cur.execute("SELECT application_no, applicant_name, mobile, dob, village, block, "
                 "bank_account, ifsc, submitted_at, status FROM applications WHERE id = %s",
@@ -351,20 +368,14 @@ def generate_acknowledgment(cur, app_id):
     pdf.cell(0, 8, "Department of Social Welfare", ln=1, align="C")
     pdf.cell(0, 8, "Old Age Pension Scheme - Acknowledgment", ln=1, align="C")
     pdf.ln(4)
-    # decorative border, as per approved letterhead design
-    for i in range(0, 2000):
-        x = 10 + (i % 190)
-        pdf.line(x, 282, x + 0.5, 282)
-        pdf.line(x, 12, x + 0.5, 12)
+    # Decorative border — simplified from 2000-iteration loop to two rect calls
+    pdf.rect(10, 12, 190, 270)
     labels = ["Application No", "Applicant Name", "Mobile", "Date of Birth",
               "Village", "Block", "Bank Account", "IFSC", "Submitted At", "Status"]
     pdf.set_font("Helvetica", "", 10)
     for label, val in zip(labels, row):
-        try:
-            pdf.cell(60, 8, label, border=1)
-            pdf.cell(0, 8, str(val), border=1, ln=1)
-        except Exception:
-            pdf.cell(0, 8, "?", border=1, ln=1)
+        pdf.cell(60, 8, _safe_latin(label), border=1)
+        pdf.cell(0, 8, _safe_latin(val), border=1, ln=1)
     pdf.ln(6)
     pdf.set_font("Helvetica", "I", 9)
     pdf.multi_cell(0, 5, "This is a computer generated acknowledgment. Processing SLA "
@@ -417,7 +428,16 @@ def view_application(app_id):
     cur.close(); conn.close()
     if not row:
         abort(404)
-    return render_template("application.html", a=row, app_id=app_id)
+    # IDOR fix: citizens must only see their own application.
+    # Admin sessions (session["admin"]) may view any application.
+    portal_mobile = session.get("portal_mobile")
+    if not session.get("admin") and row[2] != portal_mobile:
+        abort(403)
+    # Compute edit eligibility (24-hour window from submission)
+    edit_open = False
+    if row[9] and not session.get("admin"):
+        edit_open = (datetime.now() - row[9]).total_seconds() < 86400
+    return render_template("application.html", a=row, app_id=app_id, edit_open=edit_open)
 
 
 @app.route("/ack/<int:app_id>.pdf")
@@ -439,14 +459,14 @@ def ack_pdf(app_id):
 @app.route("/status/reset", methods=["GET", "POST"])
 def reset_password():
     if request.method == "POST":
-        mobile = request.form.get("mobile", "")
+        mobile = request.form.get("mobile", "").strip()
         conn = get_db()
         cur = conn.cursor()
-        # fetch account for reset
-        cur.execute("SELECT mobile FROM portal_users WHERE mobile = '%s'" % mobile)
+        # SQL injection fix: use parameterized queries (previously used string interpolation)
+        cur.execute("SELECT mobile FROM portal_users WHERE mobile = %s", (mobile,))
         row = cur.fetchone()
         if row:
-            cur.execute("SELECT dob FROM applications WHERE mobile = '%s' LIMIT 1" % mobile)
+            cur.execute("SELECT dob FROM applications WHERE mobile = %s LIMIT 1", (mobile,))
             r2 = cur.fetchone()
             if r2:
                 newpass = r2[0].strftime("%d%m%Y")
@@ -531,12 +551,15 @@ def admin_view(app_id):
 
 @app.route("/admin/approve/<int:app_id>", methods=["POST"])
 def admin_approve(app_id):
-    if not session.get("logged_in"):
+    # Session confusion fix: previously checked session["logged_in"] which is also
+    # set for citizen portal logins. Now requires session["admin"] explicitly.
+    if not session.get("admin"):
         abort(403)
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("UPDATE applications SET status = 'APPROVED', decided_at = %s "
-                "WHERE id = %s", (datetime.now(), app_id))
+    cur.execute("UPDATE applications SET status = 'APPROVED', decided_at = %s, "
+                "decided_by = %s WHERE id = %s",
+                (datetime.now(), session.get("portal_mobile", "admin"), app_id))
     conn.commit()
     cur.close(); conn.close()
     flash("Application approved.")
@@ -545,16 +568,72 @@ def admin_approve(app_id):
 
 @app.route("/admin/reject/<int:app_id>", methods=["POST"])
 def admin_reject(app_id):
-    if not session.get("logged_in"):
+    # Session confusion fix: same as admin_approve above.
+    if not session.get("admin"):
         abort(403)
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("UPDATE applications SET status = 'REJECTED', decided_at = %s "
-                "WHERE id = %s", (datetime.now(), app_id))
+    cur.execute("UPDATE applications SET status = 'REJECTED', decided_at = %s, "
+                "decided_by = %s WHERE id = %s",
+                (datetime.now(), session.get("portal_mobile", "admin"), app_id))
     conn.commit()
     cur.close(); conn.close()
     flash("Application rejected.")
     return redirect(url_for("admin_list"))
+
+
+@app.route("/application/<int:app_id>/edit", methods=["GET", "POST"])
+def edit_application(app_id):
+    """24-hour post-submission edit window for minor corrections.
+    Allows citizens to fix name, village, bank account, IFSC typos.
+    Locked after 24 hours or once status moves beyond PENDING.
+    """
+    if not session.get("logged_in"):
+        flash("Please login to edit your application.")
+        return redirect(url_for("status_login"))
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT applicant_name, village, bank_account, ifsc, mobile, "
+                "status, submitted_at FROM applications WHERE id = %s", (app_id,))
+    row = cur.fetchone()
+    if not row:
+        cur.close(); conn.close()
+        abort(404)
+    # IDOR check: only the owning citizen (or admin) may edit
+    if not session.get("admin") and row[4] != session.get("portal_mobile"):
+        cur.close(); conn.close()
+        abort(403)
+    # Time-window check: edits only allowed within 24 hours of submission
+    submitted_at = row[6]
+    age_seconds = (datetime.now() - submitted_at).total_seconds() if submitted_at else 99999
+    if age_seconds >= 86400 or row[5] != "PENDING":
+        cur.close(); conn.close()
+        flash("The edit window has closed. Please contact your Block Development Office.")
+        return redirect(url_for("view_application", app_id=app_id))
+    if request.method == "POST":
+        new_name = sanitize(request.form.get("applicant_name", "").strip())
+        new_village = request.form.get("village", "").strip()[:100]
+        new_account = request.form.get("bank_account", "").strip()[:30]
+        new_ifsc = request.form.get("ifsc", "").strip().upper()[:15]
+        if not new_name or not new_village or not new_account:
+            flash("All fields are required.")
+        else:
+            cur.execute(
+                "UPDATE applications SET applicant_name=%s, village=%s, "
+                "bank_account=%s, ifsc=%s WHERE id=%s",
+                (new_name, new_village, new_account, new_ifsc, app_id))
+            conn.commit()
+            app.logger.info("application_edit app_id=%d by mobile=%s" %
+                            (app_id, session.get("portal_mobile")))
+            flash("Your application has been updated.")
+            cur.close(); conn.close()
+            return redirect(url_for("view_application", app_id=app_id))
+    cur.close(); conn.close()
+    return render_template("edit_application.html",
+                           app_id=app_id,
+                           applicant_name=row[0], village=row[1],
+                           bank_account=row[2], ifsc=row[3],
+                           seconds_remaining=int(86400 - age_seconds))
 
 
 # ---------------------------------------------------------------------------

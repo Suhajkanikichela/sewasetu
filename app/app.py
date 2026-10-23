@@ -386,12 +386,12 @@ def generate_acknowledgment(cur, app_id):
     pdf.rect(10, 12, 190, 270)
     labels = ["Application No", "Applicant Name", "Mobile", "Date of Birth",
               "Village", "Block", "Bank Account", "IFSC", "Submitted At", "Status"]
-    pdf.set_font("Helvetica", "", 10)
+    pdf.set_font("NotoSans", "", 10)
     for label, val in zip(labels, row):
-        pdf.cell(60, 8, _safe_latin(label), border=1)
-        pdf.cell(0, 8, _safe_latin(val), border=1, ln=1)
+        pdf.cell(60, 8, str(label), border=1)
+        pdf.cell(0, 8, "" if val is None else str(val), border=1, ln=1)
     pdf.ln(6)
-    pdf.set_font("Helvetica", "I", 9)
+    pdf.set_font("NotoSans", "I", 9)
     pdf.multi_cell(0, 5, "This is a computer generated acknowledgment. Processing SLA "
                          "as per the Purvanchal Right to Public Services Act applies.")
     return bytes(pdf.output())
